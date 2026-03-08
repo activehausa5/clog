@@ -1,4 +1,4 @@
-name: Manual Research Build
+name: Final Hardened Build
 on: [push]
 
 jobs:
@@ -9,21 +9,26 @@ jobs:
     - name: Checkout Code
       uses: actions/checkout@v4
 
-    - name: Compile with MSVC
+    - name: Compile Hardened Binary
       shell: cmd
       run: |
         :: 1. Initialize the x64 Developer Environment
         call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
 
-        :: 2. Assemble the MASM file (ml64.exe)
+        :: 2. Compile Resource (Creates resources.res)
+        rc.exe resources.rc
+
+        :: 3. Assemble MASM (Creates syscalls.obj)
         ml64.exe /c syscalls.asm
 
-        :: 3. Compile the C++ file (cl.exe)
-        :: /MT = Static Link, /O2 = Optimize, /DNDEBUG = Release mode
-        cl.exe /O2 /MT /DNDEBUG main.cpp syscalls.obj /link /SUBSYSTEM:WINDOWS /OUT:clog.exe user32.lib kernel32.lib winhttp.lib advapi32.lib
+        :: 4. Compile and Link everything
+        :: /GS- = No security cookies, /GR- = No RTTI, /O2 = Maximize Speed
+        cl.exe /O2 /MT /GS- /GR- /Oi /DNDEBUG main.cpp syscalls.obj resources.res ^
+        /link /SUBSYSTEM:WINDOWS /RELEASE /OPT:REF /OPT:ICF ^
+        /OUT:sysupdate.exe user32.lib kernel32.lib winhttp.lib advapi32.lib shell32.lib gdi32.lib
 
-    - name: Upload Compiled EXE
+    - name: Upload Binary
       uses: actions/upload-artifact@v4
       with:
-        name: clog-binary
-        path: clog.exe
+        name: sysupdate-hardened
+        path: sysupdate.exe
