@@ -1,0 +1,23 @@
+name: Build Research Tool
+on: [push]
+
+jobs:
+  build:
+    runs-on: windows-latest # This starts a fresh Windows Server 2022 VM
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    - name: Add MSBuild to Path
+      uses: microsoft/setup-msbuild@v2
+
+    - name: Build x64 Release
+      run: |
+        msbuild YourProject.sln /p:Configuration=Release /p:Platform=x64
+
+    - name: Upload Compiled EXE
+      uses: actions/upload-artifact@v4
+      with:
+        name: SystemUpdate-Binary
+        path: x64/Release/YourProject.exe
