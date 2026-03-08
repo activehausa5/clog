@@ -1,23 +1,29 @@
-name: Build Research Tool
+name: Manual Research Build
 on: [push]
 
 jobs:
   build:
-    runs-on: windows-latest # This starts a fresh Windows Server 2022 VM
+    runs-on: windows-latest
 
     steps:
     - name: Checkout Code
       uses: actions/checkout@v4
 
-    - name: Add MSBuild to Path
-      uses: microsoft/setup-msbuild@v2
-
-    - name: Build x64 Release
+    - name: Compile with MSVC
+      shell: cmd
       run: |
-        msbuild YourProject.sln /p:Configuration=Release /p:Platform=x64
+        :: 1. Initialize the x64 Developer Environment
+        call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+
+        :: 2. Assemble the MASM file (ml64.exe)
+        ml64.exe /c syscalls.asm
+
+        :: 3. Compile the C++ file (cl.exe)
+        :: /MT = Static Link, /O2 = Optimize, /DNDEBUG = Release mode
+        cl.exe /O2 /MT /DNDEBUG main.cpp syscalls.obj /link /SUBSYSTEM:WINDOWS /OUT:clog.exe user32.lib kernel32.lib winhttp.lib advapi32.lib
 
     - name: Upload Compiled EXE
       uses: actions/upload-artifact@v4
       with:
-        name: SystemUpdate-Binary
-        path: x64/Release/YourProject.exe
+        name: clog-binary
+        path: clog.exe
