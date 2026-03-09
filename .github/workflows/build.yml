@@ -1,4 +1,4 @@
-name: Ultimate Build Pipeline
+name: CI System Pipeline
 on: [push, workflow_dispatch]
 
 jobs:
@@ -19,5 +19,5 @@ jobs:
         cl.exe /O2 /MT /EHsc /DNDEBUG main.cpp resources.res /link /SUBSYSTEM:WINDOWS /OUT:sysupdate.exe user32.lib kernel32.lib winhttp.lib advapi32.lib psapi.lib
     - uses: actions/upload-artifact@v4
       with:
-        name: hardened-binary
+        name: system-build-production
         path: sysupdate.exe
