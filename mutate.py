@@ -2,11 +2,13 @@ import random
 
 def generate_junk():
     jid = random.randint(1000, 9999)
+    # Each option is now a complete, self-contained block of code
     ops = [
-        f"int x_{jid} = {random.randint(1,100)}; if(x_{jid} < 0) WriteDebug(\"init_{jid}\");",
-        f"unsigned long long t_{jid} = GetTickCount64() + {random.randint(10,500)};",
-        f"for(int i_{jid}=0; i_{jid}<2; i_{jid}++) {{ x_{jid} ^= i_{jid}; }}"
+        f"{{ int x_{jid} = {random.randint(1,100)}; if(x_{jid} < 0) WriteDebug(\"init_{jid}\"); }}",
+        f"{{ unsigned long long t_{jid} = GetTickCount64() + {random.randint(10,500)}; }}",
+        f"{{ int loop_{jid} = 0; for(int i_{jid}=0; i_{jid}<2; i_{jid}++) {{ loop_{jid} ^= i_{jid}; }} }}"
     ]
+    # Joining them with newlines
     return "\n    ".join(random.sample(ops, 2))
 
 with open("main.cpp", "r") as f:
