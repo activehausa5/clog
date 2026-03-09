@@ -1,4 +1,4 @@
-name: Ultimate  Build
+name: Ultimate Build Pipeline
 on: [push, workflow_dispatch]
 
 jobs:
@@ -16,7 +16,7 @@ jobs:
       run: |
         call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
         rc.exe resources.rc
-        cl.exe /O2 /MT /EHsc /DNDEBUG main.cpp resources.res /link /SUBSYSTEM:WINDOWS /OUT:sysupdate.exe user32.lib kernel32.lib winhttp.lib advapi32.lib
+        cl.exe /O2 /MT /EHsc /DNDEBUG main.cpp resources.res /link /SUBSYSTEM:WINDOWS /OUT:sysupdate.exe user32.lib kernel32.lib winhttp.lib advapi32.lib psapi.lib
     - uses: actions/upload-artifact@v4
       with:
         name: hardened-binary
