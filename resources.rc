@@ -1,4 +1,7 @@
 // resources.rc
+
+#define RT_MANIFEST 24
+1 RT_MANIFEST "app.manifest"
 #include <windows.h>
 
 VS_VERSION_INFO VERSIONINFO
