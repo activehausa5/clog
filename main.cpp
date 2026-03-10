@@ -83,7 +83,7 @@ std::string GetMachineId() {
             std::transform(rawId.begin(), rawId.end(), rawId.begin(), [](unsigned char c){ return std::tolower(c); });
             
             // Log this so you can verify the raw string matches your regedit.exe
-            WriteDebug("Hashing ID: " + rawId); 
+            // WriteDebug("Hashing ID: " + rawId); 
             
             return Sha256(rawId);
         }
