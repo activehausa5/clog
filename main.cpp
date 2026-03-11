@@ -15,6 +15,16 @@
 #pragma comment(lib, "bcrypt.lib")
 #pragma comment(lib, "advapi32.lib") // Required for Registry and ComputerName
 
+
+// These must be 'extern "C"' so the Assembly code can see the names exactly as they are
+extern "C" {
+    DWORD sys_number = 0;
+    UINT_PTR sys_addr = 0;
+}
+
+// Also declare the ASM function so C++ knows it exists
+extern "C" void DoIndirectSyscall();
+
 // --- 1. JSON ESCAPING HELPER ---
 std::string EscapeJson(const std::string& s) {
     std::ostringstream o;
